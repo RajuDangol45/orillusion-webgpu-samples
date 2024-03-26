@@ -1,96 +1,80 @@
-import triangleVert from './shaders/triangle.vert.wgsl?raw'
-import redFrag from './shaders/red.frag.wgsl?raw'
+import vertex from "./shaders/triangle.vert.wgsl?raw";
+import frag from "./shaders/red.frag.wgsl?raw";
 
-// initialize webgpu device & config canvas context
-async function initWebGPU(canvas: HTMLCanvasElement) {
-    if(!navigator.gpu)
-        throw new Error('Not Support WebGPU')
-    const adapter = await navigator.gpu.requestAdapter({
-        powerPreference: 'high-performance'
-        // powerPreference: 'low-power'
-    })
-    if (!adapter)
-        throw new Error('No Adapter Found')
-    const device = await adapter.requestDevice()
-    const context = canvas.getContext('webgpu') as GPUCanvasContext
-    const format = navigator.gpu.getPreferredCanvasFormat()
-    const devicePixelRatio = window.devicePixelRatio || 1
-    canvas.width = canvas.clientWidth * devicePixelRatio
-    canvas.height = canvas.clientHeight * devicePixelRatio
-    const size = {width: canvas.width, height: canvas.height}
-    context.configure({
-        // json specific format when key and value are the same
-        device, format,
-        // prevent chrome warning
-        alphaMode: 'opaque'
-    })
-    return {device, context, format, size}
-}
-// create a simple pipiline
-async function initPipeline(device: GPUDevice, format: GPUTextureFormat): Promise<GPURenderPipeline> {
-    const descriptor: GPURenderPipelineDescriptor = {
-        layout: 'auto',
-        vertex: {
-            module: device.createShaderModule({
-                code: triangleVert
-            }),
-            entryPoint: 'main'
-        },
-        primitive: {
-            topology: 'triangle-list' // try point-list, line-list, line-strip, triangle-strip?
-        },
-        fragment: {
-            module: device.createShaderModule({
-                code: redFrag
-            }),
-            entryPoint: 'main',
-            targets: [
-                {
-                    format: format
-                }
-            ]
-        }
-    }
-    return await device.createRenderPipelineAsync(descriptor)
-}
-// create & submit device commands
-function draw(device: GPUDevice, context: GPUCanvasContext, pipeline: GPURenderPipeline) {
-    const commandEncoder = device.createCommandEncoder()
-    const view = context.getCurrentTexture().createView()
-    const renderPassDescriptor: GPURenderPassDescriptor = {
-        colorAttachments: [
-            {
-                view: view,
-                clearValue: { r: 0, g: 0, b: 0, a: 1.0 },
-                loadOp: 'clear', // clear/load
-                storeOp: 'store' // store/discard
-            }
-        ]
-    }
-    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor)
-    passEncoder.setPipeline(pipeline)
-    // 3 vertex form a triangle
-    passEncoder.draw(3)
-    passEncoder.end()
-    // webgpu run in a separate process, all the commands will be executed after submit
-    device.queue.submit([commandEncoder.finish()])
+if (!navigator.gpu) throw Error("WebGPU not supported");
+
+async function initWEBGPU() {
+  const adapter = await navigator.gpu.requestAdapter({
+    powerPreference: "low-power",
+  });
+  if (!adapter) throw Error("No gpu adapter found");
+  const device = await adapter.requestDevice({
+    requiredFeatures: ["texture-compression-bc"],
+    requiredLimits: {
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    },
+  });
+  const canvas = document.querySelector("canvas");
+  const context: any = canvas?.getContext("webgpu");
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  context?.configure({
+    device,
+    format,
+  });
+
+  return { adapter, device, context, format };
 }
 
-async function run(){
-    const canvas = document.querySelector('canvas')
-    if (!canvas)
-        throw new Error('No Canvas')
-    const {device, context, format} = await initWebGPU(canvas)
-    const pipeline = await initPipeline(device, format)
-    // start draw
-    draw(device, context, pipeline)
-    
-    // re-configure context on resize
-    window.addEventListener('resize', ()=>{
-        canvas.width = canvas.clientWidth * devicePixelRatio
-        canvas.height = canvas.clientHeight * devicePixelRatio
-        // don't need to recall context.configure() after v104
-        draw(device, context, pipeline)
-    })
+async function initPipeline(device: GPUDevice, format: GPUTextureFormat) {
+  const vertexShader = device.createShaderModule({
+    code: vertex,
+  });
+  const fragmentShader = device.createShaderModule({
+    code: frag,
+  });
+  const pipeline = await device.createRenderPipelineAsync({
+    vertex: {
+      module: vertexShader,
+      entryPoint: "main",
+    },
+    fragment: {
+      module: fragmentShader,
+      entryPoint: "main",
+      targets: [
+        {
+          format,
+        },
+      ],
+    },
+    primitive: {
+      topology: "triangle-list",
+    },
+    layout: "auto",
+  });
+  return { pipeline };
 }
-run()
+
+function draw(device: GPUDevice, pipeline: GPURenderPipeline, context: GPUCanvasContext) {
+    const encoder = device.createCommandEncoder();
+    const renderPass = encoder.beginRenderPass({
+        colorAttachments: [{
+            view: context.getCurrentTexture().createView(),
+            loadOp: 'clear',
+            clearValue: {r: 0, g: 0, b: 0, a: 1},
+            storeOp: 'store'
+        }]
+    })
+    renderPass.setPipeline(pipeline);
+    renderPass.draw(3);
+    renderPass.end();
+    const buffer = encoder.finish();
+    device.queue.submit([buffer]);
+}
+
+async function run() {
+  const { device, format, context} = await initWEBGPU();
+  const { pipeline } = await initPipeline(device, format);
+  draw(device, pipeline, context);
+}
+
+run();
